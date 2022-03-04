@@ -85,6 +85,14 @@
 			label = "UART_0";
 		};
 
+		eth0: ethernet@9001000 {
+			compatible = "smsc,lan91c111";
+			reg = <0x00 0x09001000 0x00 0x1000>;
+			interrupts = <GIC_SPI 2 IRQ_TYPE_LEVEL 0>;
+			local-mac-address = [00 00 94 00 83 00];
+			label = "ETH_0";
+		};
+
 		flash0: flash@0 {
 			compatible = "cfi-flash";
 			bank-width = <4>;

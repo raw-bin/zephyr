@@ -1,0 +1,12 @@
+menuconfig ETH_LAN91C111
+	bool "Enable SMSC LAN91C111 MCU family ethernet driver."
+	help
+	  LAN91C111 on-board Ethernet Controller
+
+config ETH_NIC_MODEL
+	string
+	default "LAN91C111"
+	depends on ETH_LAN91C111
+	help
+	  Tells what Qemu network model to use. This value is given as
+	  a parameter to -nic qemu command line option.
