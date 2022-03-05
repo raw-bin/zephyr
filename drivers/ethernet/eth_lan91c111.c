@@ -15,7 +15,9 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 static void eth_lan91c111_assign_mac(const struct device *dev)
 {
-	LOG_INF("%s\n", __FUNCTION__);
+	uint8_t mac_addr[6] = DT_INST_PROP(0, local_mac_address);
+
+	LOG_INF("%s: %02x:%02x:%02x:%02x:%02x:%02x\n", __FUNCTION__, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
 }
 
 static void eth_lan91c111_flush(const struct device *dev)
@@ -75,6 +77,8 @@ static struct net_stats_eth *eth_lan91c111_stats(const struct device *dev)
 static int eth_lan91c111_dev_init(const struct device *dev)
 {
 	LOG_INF("%s\n", __FUNCTION__);
+
+	eth_lan91c111_assign_mac(dev);
 	return 0;
 }
 
@@ -89,6 +93,7 @@ struct eth_lan91c111_config eth_cfg = {
 };
 
 struct eth_lan91c111_runtime eth_data = {
+	.mac_addr = DT_INST_PROP(0, local_mac_address),
 	.tx_err = false,
 };
 
