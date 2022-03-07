@@ -74,11 +74,51 @@ static struct net_stats_eth *eth_lan91c111_stats(const struct device *dev)
 }
 #endif
 
+static inline void select_bank(const struct device *dev, uint8_t num)
+{
+	sys_write8(num, REG_BANK_SEL);
+	sys_write8(num >> 8, REG_BANK_SEL + 1);
+}
+
+static inline void set_rcr(const struct device *dev, uint16_t val)
+{
+	select_bank(dev, 0);
+
+	sys_write8(val, REG_RCR);
+	sys_write8(val >> 8, REG_RCR + 1);
+}
+
+static inline void set_tcr(const struct device *dev, uint16_t val)
+{
+	select_bank(dev, 0);
+
+	sys_write8(val, REG_TCR);
+	sys_write8(val >> 8, REG_TCR + 1);
+}
+
+static inline void set_mmu_cmd(const struct device *dev, uint16_t val)
+{
+	select_bank(dev, 2);
+
+	sys_write8(val, REG_MMU_COMMAND);
+	sys_write8(val >> 8, REG_MMU_COMMAND + 1);
+}
+
 static int eth_lan91c111_dev_init(const struct device *dev)
 {
+	const struct eth_lan91c111_config *dev_conf = dev->config;
 	LOG_INF("%s\n", __FUNCTION__);
 
+	DEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);
+
 	eth_lan91c111_assign_mac(dev);
+
+	set_rcr(dev, RCR_SOFT_RESET);
+	set_rcr(dev, RCR_CLEAR);
+	set_tcr(dev, TCR_CLEAR);
+
+	set_mmu_cmd(dev, MMU_COMMAND_RESET);
+
 	return 0;
 }
 
@@ -88,7 +128,7 @@ static void eth_lan91c111_irq_config(const struct device *dev)
 }
 
 struct eth_lan91c111_config eth_cfg = {
-	.mac_base = DT_INST_REG_ADDR(0),
+	DEVICE_MMIO_ROM_INIT(DT_DRV_INST(0)),
 	.config_func = eth_lan91c111_irq_config,
 };
 
