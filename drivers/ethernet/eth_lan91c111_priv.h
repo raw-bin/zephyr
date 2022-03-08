@@ -29,6 +29,7 @@
 
 #define IMASK_RX_INTR				0x0001
 #define IMASK_TX_INTR				0x0002
+#define IMASK_TX_EMPTY_INTR	0x0004
 #define IMASK_ALLOC_INTR		0x0008
 
 #define MMU_COMMAND_BUSY    (1 << 0)
@@ -192,6 +193,20 @@ static inline void set_tx_data(const struct device *dev, uint8_t *buffer, uint16
 		sys_write8(data, DATA_REG);
 		sys_write8(data >> 8, DATA_REG + 1);
 	}
+}
+
+static inline void enable_interrupt(const struct device *dev, uint8_t interrupt)
+{
+	uint8_t mask = get_imask(dev);
+	mask |= interrupt;
+	set_imask(dev, mask);
+}
+
+static inline void disable_interrupt(const struct device *dev, uint8_t interrupt)
+{
+	uint8_t mask = get_imask(dev);
+	mask &= ~interrupt;
+	set_imask(dev, mask);
 }
 
 #endif /* ETH_LAN91C111_PRIV_H_ */

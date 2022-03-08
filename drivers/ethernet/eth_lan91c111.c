@@ -94,12 +94,15 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 	
 	if (data_len & 1) {
 		cmd = tx_buffer[data_len - 1] | 0x2000;
-		sys_write8(cmd, DATA_REG);
-		sys_write8(cmd >> 8, DATA_REG + 1);
+	} else {
+		cmd = 0;
 	}
 
+	sys_write8(cmd, DATA_REG);
+	sys_write8(cmd >> 8, DATA_REG + 1);
+
 	set_mmu_cmd(dev, MMU_COMMAND_ENQUEUE);
-	set_ireg(dev, IMASK_TX_INTR);
+	enable_interrupt(dev, IMASK_TX_INTR | IMASK_TX_EMPTY_INTR);
 
 	LOG_INF("pkt sent %p len %d", pkt, data_len);
 	return 0;
@@ -176,7 +179,7 @@ static int eth_lan91c111_dev_init(const struct device *dev)
 
 static void eth_lan91c111_irq_config(const struct device *dev)
 {
-	LOG_INF("%s\n", __FUNCTION__);
+	LOG_INF("%s: irq_num: 0x%08x\n", __FUNCTION__, DT_INST_IRQN(0));
 
 	/* Enable Interrupt. */
 	IRQ_CONNECT(DT_INST_IRQN(0),
