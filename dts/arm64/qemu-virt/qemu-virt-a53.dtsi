@@ -88,8 +88,9 @@
 		eth0: ethernet@9001000 {
 			compatible = "smsc,lan91c111";
 			reg = <0x00 0x09001000 0x00 0x1000>;
-			local-mac-address = [00 00 94 00 83 00];
 			interrupts = <GIC_SPI 10 IRQ_TYPE_LEVEL 0>;
+			/* local-mac-address = [00 00 94 00 83 00]; */
+			local-mac-address = [52 54 34 56 80 00];
 			label = "ETH_0";
 		};
 

@@ -45,6 +45,7 @@ static void eth_lan91c111_assign_mac(const struct device *dev)
 
 static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 {
+	struct eth_lan91c111_runtime *dev_data = dev->data;
 	uint16_t i, data_len, npages, pkt_num, cmd;
 	uint8_t interrupt_status = 0;
 
@@ -104,6 +105,9 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 	set_mmu_cmd(dev, MMU_COMMAND_ENQUEUE);
 	enable_interrupt(dev, IMASK_TX_INTR | IMASK_TX_EMPTY_INTR);
 
+	/* Wait and check if transmit successful or not. */
+	k_sem_take(&dev_data->tx_sem, K_FOREVER);
+
 	LOG_INF("pkt sent %p len %d", pkt, data_len);
 	return 0;
 }
@@ -115,7 +119,54 @@ static void eth_lan91c111_rx(const struct device *dev)
 
 static void eth_lan91c111_isr(const struct device *dev)
 {
+	struct eth_lan91c111_runtime *dev_data = dev->data;
+	uint32_t lock, count = 0;
+	uint16_t ptr;
+	uint8_t pending_interrupts = 0, interrupt_mask;
+
+	lock = irq_lock();
+
 	LOG_INF("%s\n", __FUNCTION__);
+	
+	ptr = get_ptr(dev);
+	interrupt_mask = get_imask(dev);
+	set_imask(dev, 0);
+
+	while(true) {
+		pending_interrupts = get_ireg(dev) & interrupt_mask;
+		if (!pending_interrupts) {
+			LOG_INF("%s: No more pending_interrupts!\n", __FUNCTION__);
+			break;
+		}
+
+		LOG_INF("%s: %d: pending_interrupts: 0x%08x\n", __FUNCTION__, count, pending_interrupts);
+
+		if (pending_interrupts & IMASK_TX_INTR) {
+			LOG_INF("%s: TX_INT!\n", __FUNCTION__);
+			set_ireg(dev, IMASK_TX_INTR);
+			k_sem_give(&dev_data->tx_sem);
+		} else if (pending_interrupts & IMASK_TX_EMPTY_INTR) {
+			LOG_INF("%s: TX_EMPTY_INTR!\n", __FUNCTION__);
+			/* set_ireg(dev, IMASK_TX_EMPTY_INTR); */
+			interrupt_mask &= ~IMASK_TX_EMPTY_INTR;
+			k_sem_give(&dev_data->tx_sem);
+		} else if (pending_interrupts & IMASK_RX_INTR) {
+			LOG_INF("%s: RX_INT!\n", __FUNCTION__);
+			set_ireg(dev, IMASK_RX_INTR);
+		} else if (pending_interrupts & IMASK_ALLOC_INTR) {
+			LOG_INF("%s: ALLOC_INTR!\n", __FUNCTION__);
+			interrupt_mask &= ~IMASK_ALLOC_INTR;
+		} else {
+			/* LOG_PANIC("%s: unsupported interrupt!", __FUNCTION__); */
+			k_oops();
+		}
+		count += 1;
+	}
+
+	set_ptr(dev, ptr);
+	set_imask(dev, interrupt_mask);
+
+	irq_unlock(lock);
 }
 
 static void eth_lan91c111_init(struct net_if *iface)
@@ -162,6 +213,7 @@ static int eth_lan91c111_dev_init(const struct device *dev)
 	eth_lan91c111_assign_mac(dev);
 
 	set_rcr(dev, RCR_SOFT_RESET);
+
 	set_rcr(dev, RCR_CLEAR);
 	set_tcr(dev, TCR_CLEAR);
 
@@ -169,7 +221,7 @@ static int eth_lan91c111_dev_init(const struct device *dev)
 	mmu_busy_wait(dev);
 
 	set_rcr(dev, RCR_ENABLE);
-	set_rcr(dev, TCR_ENABLE);
+	set_tcr(dev, TCR_ENABLE);
 
 	set_imask(dev, IMASK_RX_INTR);
 	set_imask(dev, IMASK_TX_INTR);

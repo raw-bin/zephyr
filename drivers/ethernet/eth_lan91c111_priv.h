@@ -171,6 +171,18 @@ static inline void set_ptr(const struct device *dev, uint16_t val)
 	sys_write8(val >> 8, PTR_REG + 1);
 }
 
+static inline uint16_t get_ptr(const struct device *dev)
+{
+	uint16_t retval = 0;
+
+	select_bank(dev, 2);
+
+	retval = sys_read8(PTR_REG);
+	retval |= (sys_read8(PTR_REG + 1) << 8);
+
+	return retval;	
+}
+
 static inline void set_pkt_header(const struct device *dev, uint16_t status, uint16_t length)
 {
 	select_bank(dev, 2);
@@ -191,7 +203,6 @@ static inline void set_tx_data(const struct device *dev, uint8_t *buffer, uint16
 	for (i = 0; i < length; i++) {
 		data = buffer[i];
 		sys_write8(data, DATA_REG);
-		sys_write8(data >> 8, DATA_REG + 1);
 	}
 }
 
