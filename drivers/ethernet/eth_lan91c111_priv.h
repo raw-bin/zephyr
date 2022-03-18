@@ -11,8 +11,8 @@
 #define TCR             		(DEVICE_MMIO_GET(dev) + 0x0000)
 #define MMU_COMMAND     		(DEVICE_MMIO_GET(dev) + 0x0000)
 #define MAC_ADDR0						(DEVICE_MMIO_GET(dev) + 0x0004)
-#define MAC_ADDR1						(DEVICE_MMIO_GET(dev) + 0x0008)
-#define MAC_ADDR2						(DEVICE_MMIO_GET(dev) + 0x000c)
+#define MAC_ADDR1						(DEVICE_MMIO_GET(dev) + 0x0006)
+#define MAC_ADDR2						(DEVICE_MMIO_GET(dev) + 0x0008)
 #define INT_MASK						(DEVICE_MMIO_GET(dev) + 0x000d)
 #define INT_REG				  		(DEVICE_MMIO_GET(dev) + 0x000c)
 #define AR_REG				  		(DEVICE_MMIO_GET(dev) + 0x0003)
@@ -32,14 +32,21 @@
 #define IMASK_TX_EMPTY_INTR	0x0004
 #define IMASK_ALLOC_INTR		0x0008
 
-#define MMU_COMMAND_BUSY    (1 << 0)
-#define MMU_COMMAND_ALLOC   (1 << 5)
-#define MMU_COMMAND_RESET   (2 << 5)
-#define MMU_COMMAND_ENQUEUE (6 << 5)
+#define MMU_COMMAND_BUSY    				(1 << 0)
+#define MMU_COMMAND_NOP   					(0 << 5)
+#define MMU_COMMAND_ALLOC   				(1 << 5)
+#define MMU_COMMAND_RESET   				(2 << 5)
+#define MMU_COMMAND_REMOVE  				(3 << 5)
+#define MMU_COMMAND_RELEASE 				(4 << 5)
+#define MMU_COMMAND_FREE    				(5 << 5)
+#define MMU_COMMAND_ENQUEUE 				(6 << 5)
+#define MMU_COMMAND_TX_FIFO_RESET 	(7 << 5)
 
 #define AR_FAILED						0x80
 
+#define PTR_READ						0x2000
 #define PTR_AUTO_INCREMENT	0x4000
+#define PTR_RECEIVE					0x8000
 
 struct eth_lan91c111_runtime {
 	DEVICE_MMIO_RAM;
@@ -73,12 +80,36 @@ static inline void set_rcr(const struct device *dev, uint16_t val)
 	sys_write8(val >> 8, RCR + 1);
 }
 
+static inline uint16_t get_rcr(const struct device *dev)
+{
+	uint16_t retval = 0;
+
+	select_bank(dev, 0);
+
+	retval = sys_read8(RCR);
+	retval |= sys_read8(RCR + 1) << 8;
+
+	return retval;
+}
+
 static inline void set_tcr(const struct device *dev, uint16_t val)
 {
 	select_bank(dev, 0);
 
 	sys_write8(val, TCR);
 	sys_write8(val >> 8, TCR + 1);
+}
+
+static inline uint16_t get_tcr(const struct device *dev)
+{
+	uint16_t retval = 0;
+
+	select_bank(dev, 0);
+
+	retval = sys_read8(TCR);
+	retval |= sys_read8(TCR + 1) << 8;
+
+	return retval;
 }
 
 static inline void set_mmu_cmd(const struct device *dev, uint16_t val)
@@ -114,32 +145,70 @@ static inline void mmu_busy_wait(const struct device *dev)
 	}
 }
 
-static inline void set_imask(const struct device *dev, uint8_t val)
+static inline void set_int_mask_raw(const struct device *dev, uint8_t val)
 {
 	select_bank(dev, 2);
 
 	sys_write8(val, INT_MASK);
 }
 
-static inline uint8_t get_imask(const struct device *dev)
+static inline uint8_t get_int_mask_raw(const struct device *dev)
 {
 	select_bank(dev, 2);
 
 	return sys_read8(INT_MASK);
 }
 
-static inline void set_ireg(const struct device *dev, uint8_t val)
+static inline void set_int_mask(const struct device *dev, uint8_t mask)
+{
+	uint8_t imask = get_int_mask_raw(dev);
+	imask |= mask;
+	set_int_mask_raw(dev, imask);
+}
+
+static inline uint8_t get_int_mask(const struct device *dev)
+{
+	return get_int_mask_raw(dev);
+}
+
+static inline void clear_int_mask(const struct device *dev, uint8_t mask)
+{
+	uint8_t imask = get_int_mask_raw(dev);
+	imask &= ~mask;
+	set_int_mask_raw(dev, imask);
+}
+
+static inline void set_int_reg_raw(const struct device *dev, uint8_t val)
 {
 	select_bank(dev, 2);
 
 	sys_write8(val, INT_REG);
 }
 
-static inline uint8_t get_ireg(const struct device *dev)
+static inline uint8_t get_int_reg_raw(const struct device *dev)
 {
 	select_bank(dev, 2);
 
 	return sys_read8(INT_REG);
+}
+
+static inline void set_int_reg(const struct device *dev, uint8_t mask)
+{
+	uint8_t reg = get_int_reg_raw(dev);
+	reg |= mask;
+	set_int_reg_raw(dev, reg);
+}
+
+static inline uint8_t get_int_reg(const struct device *dev)
+{
+	return get_int_reg_raw(dev);
+}
+
+static inline void clear_int_reg(const struct device *dev, uint8_t mask)
+{
+	uint8_t reg = get_int_reg(dev);
+	reg &= ~mask;
+	set_int_reg_raw(dev, reg);
 }
 
 static inline uint8_t get_ar(const struct device *dev)
@@ -194,30 +263,41 @@ static inline void set_pkt_header(const struct device *dev, uint16_t status, uin
 	sys_write8(length >> 8, DATA_REG + 1);
 }
 
+static inline void get_pkt_header(const struct device *dev, uint16_t *status, uint16_t *length)
+{
+	uint16_t val = 0;
+
+	select_bank(dev, 2);
+
+	val = sys_read8(DATA_REG);
+	val |= (sys_read8(DATA_REG + 1) << 8);
+	*status = val;
+
+	val = sys_read8(DATA_REG);
+	val |= (sys_read8(DATA_REG + 1) << 8);
+	*length = val;
+}
+
 static inline void set_tx_data(const struct device *dev, uint8_t *buffer, uint16_t length)
+{
+	uint16_t i;
+
+	select_bank(dev, 2);
+
+	for (i = 0; i < length; i++) {
+		sys_write8(buffer[i], DATA_REG);
+	}
+}
+
+static inline void get_rx_data(const struct device *dev, uint8_t *buffer, uint16_t length)
 {
 	uint16_t i, data;
 
 	select_bank(dev, 2);
 
 	for (i = 0; i < length; i++) {
-		data = buffer[i];
-		sys_write8(data, DATA_REG);
+		buffer[i] = sys_read8(DATA_REG);
 	}
-}
-
-static inline void enable_interrupt(const struct device *dev, uint8_t interrupt)
-{
-	uint8_t mask = get_imask(dev);
-	mask |= interrupt;
-	set_imask(dev, mask);
-}
-
-static inline void disable_interrupt(const struct device *dev, uint8_t interrupt)
-{
-	uint8_t mask = get_imask(dev);
-	mask &= ~interrupt;
-	set_imask(dev, mask);
 }
 
 #endif /* ETH_LAN91C111_PRIV_H_ */
