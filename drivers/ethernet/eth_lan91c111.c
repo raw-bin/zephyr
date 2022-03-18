@@ -13,15 +13,6 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #include <ethernet/eth_stats.h>
 #include "eth_lan91c111_priv.h"
 
-static void DUMMY_LOG_INF(const char *s, ...) {}
-
-#if 0
-#define DBG printk
-#define LOG_ERR printk
-#else
-#define DBG DUMMY_LOG_INF
-#endif
-
 static void eth_lan91c111_assign_mac(const struct device *dev)
 {
 	uint8_t mac_addr[6] = DT_INST_PROP(0, local_mac_address);
@@ -43,8 +34,8 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 	uint8_t interrupt_status = 0, buffer;
 
 	data_len = net_pkt_get_len(pkt);
-	npages = ((data_len & ~0x1) + (6 - 1)) >> 8;
 
+	npages = ((data_len & ~0x1) + (6 - 1)) >> 8;
 	if (npages > 7) {
 		LOG_ERR("%s: TX Packet too big", __FUNCTION__);
 		return -EIO;
@@ -66,8 +57,6 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 	}
 
 	pkt_num = get_ar(dev);
-	DBG("%s: pkt_num: 0x%08x\n", __FUNCTION__, pkt_num);
-
 	if (pkt_num & AR_FAILED) {
 		LOG_ERR("%s: AR failed\n", __FUNCTION__);
 		return -EIO;
@@ -75,7 +64,6 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 
 	set_page_number(dev, pkt_num);
 	set_ptr(dev, PTR_AUTO_INCREMENT);
-
 	set_pkt_header(dev, 0, data_len + 6);
 
 	select_bank(dev, 2);
@@ -109,7 +97,6 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 	/* Wait and check if transmit successful or not. */
 	k_sem_take(&dev_data->tx_sem, K_FOREVER);
 
-	DBG("pkt sent %p len %d", pkt, data_len);
 	return 0;
 }
 
@@ -133,15 +120,14 @@ static struct net_pkt *eth_lan91c111_rx_pkt(const struct device *dev,
 
 	set_ptr(dev, PTR_READ | PTR_RECEIVE | PTR_AUTO_INCREMENT);
 	get_pkt_header(dev, &status, &frame_len);
-	frame_len &= 0x07ff;
 
-	pkt = net_pkt_rx_alloc_with_buffer(iface, frame_len,
-					   AF_UNSPEC, 0, K_NO_WAIT);
+	frame_len &= 0x07ff;
+	data_len = frame_len - 6;
+
+	pkt = net_pkt_rx_alloc_with_buffer(iface, frame_len, AF_UNSPEC, 0, K_NO_WAIT);
 	if (!pkt) {
 		return NULL;
 	}
-
-	data_len = frame_len - 6;
 
 	select_bank(dev, 2);
 
@@ -168,8 +154,6 @@ static void eth_lan91c111_rx(const struct device *dev)
 	struct net_if *iface = dev_data->iface;
 	struct net_pkt *pkt;
 
-	DBG("%s\n", __FUNCTION__);
-
 	pkt = eth_lan91c111_rx_pkt(dev, iface);
 	if (!pkt) {
 		LOG_ERR("Failed to read data");
@@ -194,18 +178,17 @@ static void eth_lan91c111_tx_done(const struct device *dev)
 {
 	unsigned int packet_status, packet_num;
 
-	DBG("%s\n", __FUNCTION__);
+	packet_num = get_page_number(dev);
 
 	packet_status = get_tx_fifo_status(dev);
 	if (packet_status & TX_FIFO_EMPTY) {
 		LOG_ERR("%s: No packet in TX FIFO\n", __FUNCTION__);
 	}
 
-	packet_num = get_page_number(dev);
 	set_page_number(dev, packet_status);
-
 	mmu_busy_wait(dev);
 	set_mmu_cmd(dev, MMU_COMMAND_FREE);
+
 	mmu_busy_wait(dev);
 	set_page_number(dev, packet_num);
 }
@@ -215,56 +198,43 @@ static void eth_lan91c111_isr(const struct device *dev)
 	struct eth_lan91c111_runtime *dev_data = dev->data;
 	uint32_t lock, count = 0;
 	uint16_t ptr;
-	uint8_t pending_interrupts = 0, interrupt_mask, interrupt_reg;
+	uint8_t pending_interrupts = 0, interrupt_mask;
 
 	lock = irq_lock();
 
 	ptr = get_ptr(dev);
 	interrupt_mask = get_int_mask(dev);
-	interrupt_reg = get_int_reg(dev);
-	DBG("%s: ENTERED, interrupt_mask: 0x%08x, interrupt_reg: 0x%08x\n", __FUNCTION__, interrupt_mask, interrupt_reg);
 	
 	set_int_mask(dev, 0);
 
 	for (count = 0; count < 1; count++) {
 		pending_interrupts = get_int_reg(dev) & interrupt_mask;
-
-		if (!pending_interrupts) {
-			DBG("%s: No more pending_interrupts!\n", __FUNCTION__);
+		if (!pending_interrupts)
 			break;
-		} else {
-			DBG("%s: %d: pending_interrupts: 0x%08x\n", __FUNCTION__, count, pending_interrupts);
-		}
 
 		if (pending_interrupts & IMASK_TX_INTR) {
-			DBG("%s: TX_INT!\n", __FUNCTION__);
 			set_int_reg(dev, IMASK_TX_INTR);
 			eth_lan91c111_tx_done(dev);
 		}
 
 		if (pending_interrupts & IMASK_TX_EMPTY_INTR) {
-			DBG("%s: TX_EMPTY_INTR!\n", __FUNCTION__);
 			set_int_reg(dev, IMASK_TX_EMPTY_INTR);
 			k_sem_give(&dev_data->tx_sem);
 			interrupt_mask &= ~IMASK_TX_EMPTY_INTR;
 		} 
 
 		if (pending_interrupts & IMASK_RX_INTR) {
-			DBG("%s: RX_INT!\n", __FUNCTION__);
 			set_int_reg(dev, IMASK_RX_INTR);
 			eth_lan91c111_rx(dev);
 		} 
 
-		if (pending_interrupts & IMASK_ALLOC_INTR) {
-			DBG("%s: ALLOC_INTR!\n", __FUNCTION__);
+		if (pending_interrupts & IMASK_ALLOC_INTR)
 			set_int_reg(dev, IMASK_ALLOC_INTR);
-		}	
 	}
 
 	set_ptr(dev, ptr);
 	set_int_mask_raw(dev, interrupt_mask);
 
-	DBG("%s: LEAVING, interrupt_mask: 0x%08x, interrupt_reg: 0x%08x\n", __FUNCTION__, interrupt_mask, interrupt_reg);
 	irq_unlock(lock);
 }
 
@@ -273,8 +243,6 @@ static void eth_lan91c111_init(struct net_if *iface)
 	const struct device *dev = net_if_get_device(iface);
 	const struct eth_lan91c111_config *dev_conf = dev->config;
 	struct eth_lan91c111_runtime *dev_data = dev->data;
-
-	DBG("%s\n", __FUNCTION__);
 
 	dev_data->iface = iface;
 
@@ -295,16 +263,12 @@ static struct net_stats_eth *eth_lan91c111_stats(const struct device *dev)
 {
 	struct eth_lan91c111_runtime *dev_data = dev->data;
 
-	/* DBG("%s\n", __FUNCTION__); */
-
 	return &dev_data->stats;
 }
 #endif
 
 static int eth_lan91c111_dev_init(const struct device *dev)
 {
-	DBG("%s\n", __FUNCTION__);
-
 	DEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);
 
 	eth_lan91c111_assign_mac(dev);
@@ -319,8 +283,6 @@ static int eth_lan91c111_dev_init(const struct device *dev)
 	set_rcr(dev, RCR_ENABLE);
 	set_tcr(dev, TCR_ENABLE);
 
-	DBG("%s: RCR: 0x%08x, TCR: 0x%08x\n", __FUNCTION__, get_rcr(dev), get_tcr(dev));
-
 	set_int_mask_raw(dev, IMASK_RX_INTR | IMASK_TX_INTR);
 
 	return 0;
@@ -328,8 +290,6 @@ static int eth_lan91c111_dev_init(const struct device *dev)
 
 static void eth_lan91c111_irq_config(const struct device *dev)
 {
-	DBG("%s: irq_num: 0x%08x\n", __FUNCTION__, DT_INST_IRQN(0));
-
 	/* Enable Interrupt. */
 	IRQ_CONNECT(DT_INST_IRQN(0),
 		    DT_INST_IRQ(0, priority),
