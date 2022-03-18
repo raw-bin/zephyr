@@ -16,18 +16,15 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 static void DUMMY_LOG_INF(const char *s, ...) {}
 
 #if 0
-#define DBG LOG_INF
+#define DBG printk
+#define LOG_ERR printk
 #else
 #define DBG DUMMY_LOG_INF
 #endif
 
-
-static uint8_t tx_buffer[ETH_TX_BUF_SIZE];
-
 static void eth_lan91c111_assign_mac(const struct device *dev)
 {
 	uint8_t mac_addr[6] = DT_INST_PROP(0, local_mac_address);
-	uint8_t test_mac_addr[6] = { 0 };
 
 	select_bank(dev, 1);
 
@@ -43,9 +40,7 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 {
 	struct eth_lan91c111_runtime *dev_data = dev->data;
 	uint16_t i, data_len, npages, pkt_num, cmd;
-	uint8_t interrupt_status = 0;
-
-	DBG("%s\n", __FUNCTION__);
+	uint8_t interrupt_status = 0, buffer;
 
 	data_len = net_pkt_get_len(pkt);
 	npages = ((data_len & ~0x1) + (6 - 1)) >> 8;
@@ -78,20 +73,29 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 		return -EIO;
 	}
 
-	set_pn(dev, pkt_num);
+	set_page_number(dev, pkt_num);
 	set_ptr(dev, PTR_AUTO_INCREMENT);
 
 	set_pkt_header(dev, 0, data_len + 6);
 
-	if (net_pkt_read(pkt, tx_buffer, data_len)) {
-		LOG_ERR("%s: net_pkt_read error\n", __FUNCTION__);
-		return -ENOBUFS;
+	select_bank(dev, 2);
+
+	for (i = 0; i < (data_len & ~1); i++) {
+		if (net_pkt_read_u8(pkt, &buffer)) {
+			LOG_ERR("%s: net_pkt_read error\n", __FUNCTION__);
+			return -ENOBUFS;
+		} else {
+			sys_write8(buffer, DATA_REG);
+		}
 	}
 	
-	set_tx_data(dev, tx_buffer, data_len & ~1);
-	
 	if (data_len & 1) {
-		cmd = tx_buffer[data_len - 1] | 0x2000;
+		if (net_pkt_read_u8(pkt, &buffer)) {
+			LOG_ERR("%s: net_pkt_read error\n", __FUNCTION__);
+			return -ENOBUFS;
+		} else {
+			cmd = buffer | 0x2000;
+		} 
 	} else {
 		cmd = 0;
 	}
@@ -111,8 +115,6 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 
 static void eth_lan91c111_rx_error(struct net_if *iface)
 {
-	const struct device *dev = net_if_get_device(iface);
-
 	eth_stats_update_errors_rx(iface);
 }
 
@@ -120,12 +122,15 @@ static struct net_pkt *eth_lan91c111_rx_pkt(const struct device *dev,
 					    struct net_if *iface)
 {
 	struct net_pkt *pkt;
-	unsigned int packet_number, status, frame_len, data_len, i;
-	uint8_t data;
+	unsigned int data_len, i;
+	uint16_t status = 0, frame_len = 0;
+	uint8_t packet_status, data;
 
-	LOG_INF("%s: entered\n", __FUNCTION__);
+	packet_status = get_rx_fifo_status(dev);
+	if (packet_status & RX_FIFO_EMPTY) {
+		LOG_ERR("%s: No packet in RX FIFO\n", __FUNCTION__);
+	}
 
-	packet_number = get_pn(dev);
 	set_ptr(dev, PTR_READ | PTR_RECEIVE | PTR_AUTO_INCREMENT);
 	get_pkt_header(dev, &status, &frame_len);
 	frame_len &= 0x07ff;
@@ -150,7 +155,6 @@ static struct net_pkt *eth_lan91c111_rx_pkt(const struct device *dev,
 	mmu_busy_wait(dev);
 	set_mmu_cmd(dev, MMU_COMMAND_RELEASE);
 
-	LOG_INF("%s: returned\n", __FUNCTION__);
 	return pkt;
 
 error:
@@ -186,6 +190,26 @@ err_mem:
 	eth_lan91c111_rx_error(iface);
 }
 
+static void eth_lan91c111_tx_done(const struct device *dev)
+{
+	unsigned int packet_status, packet_num;
+
+	DBG("%s\n", __FUNCTION__);
+
+	packet_status = get_tx_fifo_status(dev);
+	if (packet_status & TX_FIFO_EMPTY) {
+		LOG_ERR("%s: No packet in TX FIFO\n", __FUNCTION__);
+	}
+
+	packet_num = get_page_number(dev);
+	set_page_number(dev, packet_status);
+
+	mmu_busy_wait(dev);
+	set_mmu_cmd(dev, MMU_COMMAND_FREE);
+	mmu_busy_wait(dev);
+	set_page_number(dev, packet_num);
+}
+
 static void eth_lan91c111_isr(const struct device *dev)
 {
 	struct eth_lan91c111_runtime *dev_data = dev->data;
@@ -202,8 +226,9 @@ static void eth_lan91c111_isr(const struct device *dev)
 	
 	set_int_mask(dev, 0);
 
-	for (count = 0; count < 10; count++) {
+	for (count = 0; count < 1; count++) {
 		pending_interrupts = get_int_reg(dev) & interrupt_mask;
+
 		if (!pending_interrupts) {
 			DBG("%s: No more pending_interrupts!\n", __FUNCTION__);
 			break;
@@ -214,22 +239,26 @@ static void eth_lan91c111_isr(const struct device *dev)
 		if (pending_interrupts & IMASK_TX_INTR) {
 			DBG("%s: TX_INT!\n", __FUNCTION__);
 			set_int_reg(dev, IMASK_TX_INTR);
-		} else if (pending_interrupts & IMASK_TX_EMPTY_INTR) {
+			eth_lan91c111_tx_done(dev);
+		}
+
+		if (pending_interrupts & IMASK_TX_EMPTY_INTR) {
 			DBG("%s: TX_EMPTY_INTR!\n", __FUNCTION__);
 			set_int_reg(dev, IMASK_TX_EMPTY_INTR);
 			k_sem_give(&dev_data->tx_sem);
 			interrupt_mask &= ~IMASK_TX_EMPTY_INTR;
-		} else if (pending_interrupts & IMASK_RX_INTR) {
+		} 
+
+		if (pending_interrupts & IMASK_RX_INTR) {
 			DBG("%s: RX_INT!\n", __FUNCTION__);
 			set_int_reg(dev, IMASK_RX_INTR);
 			eth_lan91c111_rx(dev);
-		} else if (pending_interrupts & IMASK_ALLOC_INTR) {
+		} 
+
+		if (pending_interrupts & IMASK_ALLOC_INTR) {
 			DBG("%s: ALLOC_INTR!\n", __FUNCTION__);
 			set_int_reg(dev, IMASK_ALLOC_INTR);
-		} else {
-			/* LOG_PANIC("%s: unsupported interrupt!", __FUNCTION__); */
-			k_oops();
-		}
+		}	
 	}
 
 	set_ptr(dev, ptr);
@@ -266,7 +295,7 @@ static struct net_stats_eth *eth_lan91c111_stats(const struct device *dev)
 {
 	struct eth_lan91c111_runtime *dev_data = dev->data;
 
-	DBG("%s\n", __FUNCTION__);
+	/* DBG("%s\n", __FUNCTION__); */
 
 	return &dev_data->stats;
 }
@@ -274,7 +303,6 @@ static struct net_stats_eth *eth_lan91c111_stats(const struct device *dev)
 
 static int eth_lan91c111_dev_init(const struct device *dev)
 {
-	const struct eth_lan91c111_config *dev_conf = dev->config;
 	DBG("%s\n", __FUNCTION__);
 
 	DEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);
@@ -282,7 +310,6 @@ static int eth_lan91c111_dev_init(const struct device *dev)
 	eth_lan91c111_assign_mac(dev);
 
 	set_rcr(dev, RCR_SOFT_RESET);
-
 	set_rcr(dev, RCR_CLEAR);
 	set_tcr(dev, TCR_CLEAR);
 
@@ -294,7 +321,7 @@ static int eth_lan91c111_dev_init(const struct device *dev)
 
 	DBG("%s: RCR: 0x%08x, TCR: 0x%08x\n", __FUNCTION__, get_rcr(dev), get_tcr(dev));
 
-	set_int_mask(dev, IMASK_RX_INTR);
+	set_int_mask_raw(dev, IMASK_RX_INTR | IMASK_TX_INTR);
 
 	return 0;
 }
@@ -317,7 +344,6 @@ struct eth_lan91c111_config eth_cfg = {
 
 struct eth_lan91c111_runtime eth_data = {
 	.mac_addr = DT_INST_PROP(0, local_mac_address),
-	.tx_err = false,
 };
 
 static const struct ethernet_api eth_lan91c111_apis = {

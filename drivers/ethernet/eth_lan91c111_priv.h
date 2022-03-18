@@ -6,31 +6,33 @@
 /*
  *  Register mapping
  */
-#define BANK_SEL						(DEVICE_MMIO_GET(dev) + 0x000e)
-#define RCR             		(DEVICE_MMIO_GET(dev) + 0x0004)
-#define TCR             		(DEVICE_MMIO_GET(dev) + 0x0000)
-#define MMU_COMMAND     		(DEVICE_MMIO_GET(dev) + 0x0000)
-#define MAC_ADDR0						(DEVICE_MMIO_GET(dev) + 0x0004)
-#define MAC_ADDR1						(DEVICE_MMIO_GET(dev) + 0x0006)
-#define MAC_ADDR2						(DEVICE_MMIO_GET(dev) + 0x0008)
-#define INT_MASK						(DEVICE_MMIO_GET(dev) + 0x000d)
-#define INT_REG				  		(DEVICE_MMIO_GET(dev) + 0x000c)
-#define AR_REG				  		(DEVICE_MMIO_GET(dev) + 0x0003)
-#define PN_REG				  		(DEVICE_MMIO_GET(dev) + 0x0002)
-#define PTR_REG				  		(DEVICE_MMIO_GET(dev) + 0x0006)
-#define DATA_REG				  	(DEVICE_MMIO_GET(dev) + 0x0008)
+#define BANK_SEL										(DEVICE_MMIO_GET(dev) + 0x000e)
+#define RCR             						(DEVICE_MMIO_GET(dev) + 0x0004)
+#define TCR             						(DEVICE_MMIO_GET(dev) + 0x0000)
+#define MMU_COMMAND     						(DEVICE_MMIO_GET(dev) + 0x0000)
+#define MAC_ADDR0										(DEVICE_MMIO_GET(dev) + 0x0004)
+#define MAC_ADDR1										(DEVICE_MMIO_GET(dev) + 0x0006)
+#define MAC_ADDR2										(DEVICE_MMIO_GET(dev) + 0x0008)
+#define INT_MASK										(DEVICE_MMIO_GET(dev) + 0x000d)
+#define INT_REG				  						(DEVICE_MMIO_GET(dev) + 0x000c)
+#define AR_REG				  						(DEVICE_MMIO_GET(dev) + 0x0003)
+#define PN_REG				  						(DEVICE_MMIO_GET(dev) + 0x0002)
+#define TX_FIFO_REG				  				(DEVICE_MMIO_GET(dev) + 0x0004)
+#define RX_FIFO_REG				  				(DEVICE_MMIO_GET(dev) + 0x0005)
+#define PTR_REG				  						(DEVICE_MMIO_GET(dev) + 0x0006)
+#define DATA_REG				  					(DEVICE_MMIO_GET(dev) + 0x0008)
 
-#define RCR_CLEAR           0x0000
-#define RCR_ENABLE          0x0100
-#define RCR_SOFT_RESET      0x8000
+#define RCR_CLEAR           				0x0000
+#define RCR_ENABLE          				0x0100
+#define RCR_SOFT_RESET      				0x8000
 
-#define TCR_CLEAR           0x0000
-#define TCR_ENABLE          0x0001
+#define TCR_CLEAR           				0x0000
+#define TCR_ENABLE          				0x0001
 
-#define IMASK_RX_INTR				0x0001
-#define IMASK_TX_INTR				0x0002
-#define IMASK_TX_EMPTY_INTR	0x0004
-#define IMASK_ALLOC_INTR		0x0008
+#define IMASK_RX_INTR								0x0001
+#define IMASK_TX_INTR								0x0002
+#define IMASK_TX_EMPTY_INTR					0x0004
+#define IMASK_ALLOC_INTR						0x0008
 
 #define MMU_COMMAND_BUSY    				(1 << 0)
 #define MMU_COMMAND_NOP   					(0 << 5)
@@ -42,18 +44,20 @@
 #define MMU_COMMAND_ENQUEUE 				(6 << 5)
 #define MMU_COMMAND_TX_FIFO_RESET 	(7 << 5)
 
-#define AR_FAILED						0x80
+#define AR_FAILED										0x0080
 
-#define PTR_READ						0x2000
-#define PTR_AUTO_INCREMENT	0x4000
-#define PTR_RECEIVE					0x8000
+#define PTR_READ										0x2000
+#define PTR_AUTO_INCREMENT					0x4000
+#define PTR_RECEIVE									0x8000
+
+#define TX_FIFO_EMPTY 							0x0080
+#define RX_FIFO_EMPTY 							0x0080
 
 struct eth_lan91c111_runtime {
 	DEVICE_MMIO_RAM;
 	struct net_if *iface;
 	uint8_t mac_addr[6];
 	struct k_sem tx_sem;
-	bool tx_err;
 #if defined(CONFIG_NET_STATISTICS_ETHERNET)
 	struct net_stats_eth stats;
 #endif
@@ -218,14 +222,28 @@ static inline uint8_t get_ar(const struct device *dev)
 	return sys_read8(AR_REG);
 }
 
-static inline uint8_t get_pn(const struct device *dev)
+static inline uint8_t get_tx_fifo_status(const struct device *dev)
+{
+	select_bank(dev, 2);
+
+	return sys_read8(TX_FIFO_REG);
+}
+
+static inline uint8_t get_rx_fifo_status(const struct device *dev)
+{
+	select_bank(dev, 2);
+
+	return sys_read8(RX_FIFO_REG);
+}
+
+static inline uint8_t get_page_number(const struct device *dev)
 {
 	select_bank(dev, 2);
 
 	return sys_read8(PN_REG);
 }
 
-static inline void set_pn(const struct device *dev, uint8_t val)
+static inline void set_page_number(const struct device *dev, uint8_t val)
 {
 	select_bank(dev, 2);
 
@@ -276,28 +294,6 @@ static inline void get_pkt_header(const struct device *dev, uint16_t *status, ui
 	val = sys_read8(DATA_REG);
 	val |= (sys_read8(DATA_REG + 1) << 8);
 	*length = val;
-}
-
-static inline void set_tx_data(const struct device *dev, uint8_t *buffer, uint16_t length)
-{
-	uint16_t i;
-
-	select_bank(dev, 2);
-
-	for (i = 0; i < length; i++) {
-		sys_write8(buffer[i], DATA_REG);
-	}
-}
-
-static inline void get_rx_data(const struct device *dev, uint8_t *buffer, uint16_t length)
-{
-	uint16_t i, data;
-
-	select_bank(dev, 2);
-
-	for (i = 0; i < length; i++) {
-		buffer[i] = sys_read8(DATA_REG);
-	}
 }
 
 #endif /* ETH_LAN91C111_PRIV_H_ */
