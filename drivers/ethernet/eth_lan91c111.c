@@ -207,7 +207,7 @@ static void eth_lan91c111_isr(const struct device *dev)
 	
 	set_int_mask(dev, 0);
 
-	for (count = 0; count < 1; count++) {
+	for (count = 0; count < 16; count++) {
 		pending_interrupts = get_int_reg(dev) & interrupt_mask;
 		if (!pending_interrupts)
 			break;
@@ -227,9 +227,6 @@ static void eth_lan91c111_isr(const struct device *dev)
 			set_int_reg(dev, IMASK_RX_INTR);
 			eth_lan91c111_rx(dev);
 		} 
-
-		if (pending_interrupts & IMASK_ALLOC_INTR)
-			set_int_reg(dev, IMASK_ALLOC_INTR);
 	}
 
 	set_ptr(dev, ptr);
@@ -245,16 +242,12 @@ static void eth_lan91c111_init(struct net_if *iface)
 	struct eth_lan91c111_runtime *dev_data = dev->data;
 
 	dev_data->iface = iface;
-
-	/* Assign link local address. */
 	net_if_set_link_addr(iface, dev_data->mac_addr, 6, NET_LINK_ETHERNET);
 
 	ethernet_init(iface);
 
-	/* Initialize semaphore. */
 	k_sem_init(&dev_data->tx_sem, 0, 1);
 
-	/* Initialize Interrupts. */
 	dev_conf->config_func(dev);
 }
 
