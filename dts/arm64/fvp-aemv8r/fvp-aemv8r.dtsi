@@ -79,5 +79,13 @@
 			label = "UART_0";
 			clocks = <&uartclk>;
 		};
+
+		eth0: ethernet@9a000000 {
+			compatible = "smsc,lan91c111";
+			reg = <0x9a000000 0x1000>;
+			interrupts = <GIC_SPI 15 IRQ_TYPE_LEVEL 0>;
+			local-mac-address = [52 54 00 12 34 56];
+			label = "ETH_0";
+		};
 	};
 };

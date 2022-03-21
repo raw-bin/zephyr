@@ -17,6 +17,9 @@ static void eth_lan91c111_assign_mac(const struct device *dev)
 {
 	uint8_t mac_addr[6] = DT_INST_PROP(0, local_mac_address);
 
+	printk("%s: Trying to write this mac_addr: %02x:%02x:%02x:%02x:%02x:%02x\n", __FUNCTION__, 
+			mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+
 	select_bank(dev, 1);
 
 	sys_write8(mac_addr[0], MAC_ADDR0);
@@ -25,6 +28,16 @@ static void eth_lan91c111_assign_mac(const struct device *dev)
 	sys_write8(mac_addr[3], MAC_ADDR1 + 1);
 	sys_write8(mac_addr[4], MAC_ADDR2);
 	sys_write8(mac_addr[5], MAC_ADDR2 + 1);
+
+	mac_addr[0] = sys_read8(MAC_ADDR0);
+	mac_addr[1] = sys_read8(MAC_ADDR0 + 1);
+	mac_addr[2] = sys_read8(MAC_ADDR1);
+	mac_addr[3] = sys_read8(MAC_ADDR1 + 1);
+	mac_addr[4] = sys_read8(MAC_ADDR2);
+	mac_addr[5] = sys_read8(MAC_ADDR2 + 1);
+
+	printk("%s: Read back this mac_addr: %02x:%02x:%02x:%02x:%02x:%02x\n", __FUNCTION__, 
+			mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
 }
 
 static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
@@ -92,7 +105,6 @@ static int eth_lan91c111_send(const struct device *dev, struct net_pkt *pkt)
 	sys_write8(cmd >> 8, DATA_REG + 1);
 
 	set_mmu_cmd(dev, MMU_COMMAND_ENQUEUE);
-	set_int_mask(dev, IMASK_TX_EMPTY_INTR);
 
 	/* Wait and check if transmit successful or not. */
 	k_sem_take(&dev_data->tx_sem, K_FOREVER);
@@ -119,10 +131,13 @@ static struct net_pkt *eth_lan91c111_rx_pkt(const struct device *dev,
 	}
 
 	set_ptr(dev, PTR_READ | PTR_RECEIVE | PTR_AUTO_INCREMENT);
-	get_pkt_header(dev, &status, &frame_len);
+
+	select_bank(dev, 2);
+	status = get_pkt_header_status(dev);
+	frame_len = get_pkt_header_length(dev);
 
 	frame_len &= 0x07ff;
-	data_len = frame_len - 6;
+	data_len = frame_len - 6 - 4;
 
 	pkt = net_pkt_rx_alloc_with_buffer(iface, frame_len, AF_UNSPEC, 0, K_NO_WAIT);
 	if (!pkt) {
@@ -212,18 +227,17 @@ static void eth_lan91c111_isr(const struct device *dev)
 		if (!pending_interrupts)
 			break;
 
-		if (pending_interrupts & IMASK_TX_INTR) {
+		if (get_int_reg(dev) & IMASK_TX_INTR) {
 			set_int_reg(dev, IMASK_TX_INTR);
 			eth_lan91c111_tx_done(dev);
 		}
 
-		if (pending_interrupts & IMASK_TX_EMPTY_INTR) {
+		if (get_int_reg(dev) & IMASK_TX_EMPTY_INTR) {
 			set_int_reg(dev, IMASK_TX_EMPTY_INTR);
 			k_sem_give(&dev_data->tx_sem);
-			interrupt_mask &= ~IMASK_TX_EMPTY_INTR;
 		} 
 
-		if (pending_interrupts & IMASK_RX_INTR) {
+		if (get_int_reg(dev) & IMASK_RX_INTR) {
 			set_int_reg(dev, IMASK_RX_INTR);
 			eth_lan91c111_rx(dev);
 		} 

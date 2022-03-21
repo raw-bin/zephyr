@@ -296,4 +296,24 @@ static inline void get_pkt_header(const struct device *dev, uint16_t *status, ui
 	*length = val;
 }
 
+static inline uint16_t get_pkt_header_status(const struct device *dev)
+{
+	uint16_t status;
+
+	status = sys_read8(DATA_REG);
+	status |= (sys_read8(DATA_REG + 1) << 8);
+
+	return status;
+}
+
+static inline uint16_t get_pkt_header_length(const struct device *dev)
+{
+	uint16_t length;
+
+	length = sys_read8(DATA_REG);
+	length |= (sys_read8(DATA_REG + 1) << 8);
+
+	return length;
+}
+
 #endif /* ETH_LAN91C111_PRIV_H_ */
